@@ -90,9 +90,7 @@ class SchemaValidator:
             ],
         }
 
-    def _validate_table_schema(
-        self, cursor, table_name: str, expected_columns: List[Tuple[str, str, str]]
-    ):
+    def _validate_table_schema(self, cursor, table_name: str, expected_columns: List[Tuple[str, str, str]]):
         """Validate and fix a single' table schema"""
         try:
             # check if table exist
