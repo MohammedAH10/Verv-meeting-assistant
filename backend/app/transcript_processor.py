@@ -80,7 +80,7 @@ class SummaryResponse(BaseModel):
 # ---------------------MAIN CLASS Used by main.py------------------------------------------
 class TranscriptProcessor:
     """Handles the processing of meeting transcripts using AI models """
-    def __init__(self) -> None:
+    def __init__(self):
         """Initializee the transcript processor"""
         logger.info("TrnascriptProcessor initialized")
         self.db = DatabaseManager()
@@ -158,4 +158,167 @@ class TranscriptProcessor:
                 result_retries = 2,
             )
             logger.info("Pydantic AI Agent Initialized")
+
+            # split transcript into chunks
+            step = chunk_size - overlap
+            if <= 0:
+                logger.warning(f"Overlap ({overlap}) >= Chunk_size ({chunk_size}). Adjusting overlap")
+                overlap = max(0, chunk_size - 100)
+                step = chunk_size - overlap
+
+            chunks = [text[i:i + chunk_size] for i in range(0, len(text), step)]
+            num_chunks = len(chunks)
+            logger.info(f"Split transcript into {num_chunks} chunks")
+
+            for i, chunk in enumerate(chunks):
+                logger.info(f"Processing chunk {i + 1}/{num_chunks}")
+                try:
+                    # Run the agent to get the structured summary for the chunk
+                    if model != "ollama":
+                        summary_result = await agent.run(
+                                            f"""Given the following meeting transcript chunk, extract the relevant information according to the required JSON structure.
+                                            If a specific section (like Critical Deadlines) has no relevant information in this chunk, return an empty list for its 'blocks'. 
+                                            Ensure the output is only the JSON data.
             
+                                            IMPORTANT: Block types must be one of: 'text', 'bullet', 'heading1', 'heading2'
+                                            - Use 'text' for regular paragraphs
+                                            - Use 'bullet' for list items
+                                            - Use 'heading1' for major headings
+                                            - Use 'heading2' for subheadings
+                                                    
+                                            For the color field, use 'gray' for less important content or '' (empty string) for default.
+                        
+                                            Transcript Chunk:
+                                            ---
+                                            {chunk}
+                                            ---
+                        
+                                            Please capture all relevant action items. Transcription can have spelling mistakes. correct it if required. context is important.
+                                                
+                                            While generating the summary, please add the following context:
+                                            ---
+                                            {custom_prompt}
+                                            ---
+                                            Make sure the output is only the JSON data.
+                                            """,
+                                        )
+                    else:
+                        logger.info(f"USing ollama model {model_name} and chunk size: {chunk_size} with overlap {overlap}")
+                        response = await self.chat_ollama_model(model_name, chunk, custom_prompt)
+
+                        # check if response os SummaryResponse object or a string that need validation
+                        if isinstance(response, SummaryResponse):
+                            summary_result = response
+                        else:
+                            # if it is a string (JSON) validate it
+                            summary_result = SummaryResponse.model_validate_json(response)
+
+                        logger.info(f"Summary result for chunk {i+1}: {summary_result}")
+                        logger.info(f"Summary result type for chunk {i+1}: {type(summary_result)}")
+
+
+                    if hasattr(summary_result, 'data') and isinstance(summary_result.data, SummaryResponse):
+                        final_summary_pydantic = summary_result.data
+                    elif isinstance(summary_result, SummaryResponse):
+                        final_summary_pydantic = summary_result
+                    else:
+                        logger.error(f"Unexpected result type from agent for chunk {i+1}: {type(summary_result)}")
+                        continue # Skip this chunk
+
+                    # convert the pydantic model to a JSON string
+                    chunk_summary_json = final_summary_pydantic.model_dump_json()
+                    all_json_data.append(chunk_summary_json)
+                    logger.info(f"Successfully generated summary for chunk {i+1}")
+
+                except Exception as chunk_error:
+                    logger.error(f"Error processing chunk {i+1}: {chunk_error}", exc_info=True)
+
+            logger.info(f"Finished processing all {num_chunks} chunks")
+            return num_chunks, all_json_data
+        except Exception as e:
+            logger.error(f"Error during transcript processing: {str(e)}", exc_info=True)
+            raise
+
+    async def chat_ollama_model(self, model_name: str, transcript: str, custom_prompt: str):
+        message = {
+            "role": "system",
+            "content": f'''
+                    Given the following meeting transcript chunk, extract the relevant information according to the required JSON structure. If a specific section (like Critical Deadlines) has no relevant information in this chunk, return an empty list for its 'blocks'. Ensure the output is only the JSON data.
+            
+                    Transcript Chunk:
+                        ---
+                        {transcript}
+                        ---
+                    Please capture all relevant action items. Transcription can have spelling mistakes. correct it if required. context is important.
+                    
+                    While generating the summary, please add the following context:
+                    ---
+                    {custom_prompt}
+                    ---
+            
+                    Make sure the output is only the JSON data.
+                
+                    ''',
+        }
+
+        # Create a client and track it for cleanup
+        ollama_host = os.getenv('OLLAMA_HOST', 'http://127.0.0.1:11434')
+        client = AsyncClient(host=ollama_host)
+        self.activate_clients.append(client)
+
+
+        try:
+            response = await client.chat(model=model_name, messages=[message], stream=True, format=SummaryResponse.model_json_schema())
+
+            full_response = ""
+            async for part in response:
+                content = part['message']['content']
+                print(content, end='', flush=True)
+                full_response += content
+
+            try:
+                summary = SummaryResponse.model_validate_json(full_response)
+                print("\n", summary.model_dump_json(indent=2), type(summary))
+                return summary
+            except Exception as e:
+                print(f"\nError parsing response: {e}")
+                return full_response
+
+        except asyncio.CancelledError:
+            logger.info("Ollama request was cancelled during shutdown")
+            raise
+        except Exception as e:
+            logger.error(f"Error in Ollama chat: {e}")
+            raise
+        finally:
+            # remove client from active client list
+            if client in self.activate_clients:
+                self.activate_clients.remove(client)
+
+
+    def cleanup(self):
+        """Clean up resources used by TranscriptProcessor"""
+        logger.info("Cleaning up TranscriptProcessor resources")
+
+        try:
+            # close database connection if any
+            if hasattr(self, 'db') and self.db is not None:
+                self.db.close()
+                logger.info("Database connection cleanup (using context managers)")
+
+            # Cancel any active Ollama client sessions
+            if hasattr(self, 'active_clients') and self.active_clients:
+                logger.info(f"Terminating {len(self.active_clients)} active Ollama client sessions")
+                for client in self.active_clients:
+                    try:
+                        # Close the client's underlying connection
+                        if hasattr(client, '_client') and hasattr(client._client, 'close'):
+                            asyncio.create_task(client._client.aclose())
+                    except Exception as client_error:
+                        logger.error(f"Error closing Ollama client: {client_error}", exc_info=True)
+
+                # Clear the list
+                self.active_clients.clear()
+                logger.info("All Ollama client sessions terminated")
+        except Exception as e:
+            logger.error(f"Error during TranscriptProcessor cleanup: {str(e)}", exc_info=True)
