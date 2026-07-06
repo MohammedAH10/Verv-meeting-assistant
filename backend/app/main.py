@@ -3,7 +3,7 @@ import time
 import json
 import uvicorn
 import logging
-from fastapi import FastAPI, HTTPExceptions, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -176,3 +176,33 @@ class SummaryProcessor:
         except Exception as e:
             logger.error(f"Error during cleanup: {str(e)}", exc_info=True)
 
+# Inititlaize processor
+processor = SummaryProcessor()
+
+# new meeting management endpoints
+@app.get("/get-meetings", response_model=List[MeetingResponse])
+async def get_meetings():
+    """Get all meetings with their basic information"""
+    try:
+        meetings = await db.get_all_meetings()
+        return [{"id": meeting["id"], "title": meeting["title"]} for meeting in meetings]
+    except Exception as e:
+        logger.error(f"Error getting meetings: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get(f"/get-meeting/{meeting_id}", response_model=MeetingDetailsResponse)
+async def get_meeting(meeting_id: str):
+    """Get specific meeting by ID with all its details"""
+    try:
+        meeting = await db.get_meeting(meeting_id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+        return meeting
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting meeting {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))       
+
+# @app.post("")
+        
