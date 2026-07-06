@@ -117,16 +117,62 @@ class TrascriptRequest(BaseModel):
     overlap: Optional[int] = 1000
     custom_prompt: Optional[str] = "Generate a summary of the meeting transcript."
 
-# class SummaryProcessor:
-#     """Handles the processing of the summariess in the thread-safe way"""
-#     def __init__(self):
-#         try:
-#             self.db = DatabaseManager()
+class SummaryProcessor:
+    """Handles the processing of the summariess in the thread-safe way"""
+    def __init__(self):
+        try:
+            self.db = DatabaseManager()
 
-#             logger.info("Initializing SummaryProcessor components")
-#             self.transcript_processor = TranscriptProcessor()
-#             logger.info("SummaryProcessor initialized successfully (core components)")
-#         except Exception as e:
-#             logger.error(f"Failed to initialized SummaryProcessor: {str(e)}", exc_info=True)
-#             raise 
-            
+            logger.info("Initializing SummaryProcessor components")
+            self.transcript_processor = TranscriptProcessor()
+            logger.info("SummaryProcessor initialized successfully (core components)")
+        except Exception as e:
+            logger.error(f"Failed to initialized SummaryProcessor: {str(e)}", exc_info=True)
+            raise 
+
+    async def process_transcript(self, text: str, model: str, model_name: str, chunk_size: int = 5000,
+        overlap: int = 1000, custom_prompt: str = "Generate a summary of the meeting transcript") -> tuple:
+            """Process a transcript text"""
+            try:
+                if not text:
+                    raise ValueError("Empty transcript text provided")
+
+                # Validate chunk_size and overlap 
+                if chunk_size <= 0:
+                    raise ValueError("Chunk_size must be positive")
+                if overlap < 0:
+                    raise ValueError("overlap must be non-negative")
+                if overlap >=chunk_size:
+                    overlap = chunk_size - 1 # Ensure overlap is less than chunk_size 
+
+                # Ensure step size is positive
+                step_size = chunk_size - overlap
+                if step_size <= 0:
+                    chunk_size = overlap + 1 # Adjust chunk_size to ensure positive step
+
+                logger.info(f"Processing transcript of length {len(text)} with chunk_size = {chunk_size}, overlap = {overlap}")
+                num_chunks, all_json_data = await self.transcript_processor.process_transcript(
+                    text=text,
+                    model=model,
+                    model_name=model_name,
+                    chunk_size=chunk_size,
+                    overlap=overlap,
+                    custom_prompt=custom_prompt
+                )
+                logger.info(f"Successfully processed transcript into {num_chunks} chunks")
+
+                return num_chunks, all_json_data
+            except Exception as e:
+                logger.error(f"Error processing transcript: {str(e)}", exc_info=True)
+                raise
+
+    def cleanup(self):
+        """Cleanup resources"""
+        try:
+            logger.info("Cleaning up resources")
+            if hasattr(self, 'transcript_processor'):
+                self.transcript_processor.cleanup()
+            logger.info("Cleanup completed successfully")
+        except Exception as e:
+            logger.error(f"Error during cleanup: {str(e)}", exc_info=True)
+
