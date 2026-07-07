@@ -190,7 +190,7 @@ async def get_meetings():
         logger.error(f"Error getting meetings: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get(f"/get-meeting/{meeting_id}", response_model=MeetingDetailsResponse)
+@app.get("/get-meeting/{meeting_id}", response_model=MeetingDetailsResponse)
 async def get_meeting(meeting_id: str):
     """Get specific meeting by ID with all its details"""
     try:

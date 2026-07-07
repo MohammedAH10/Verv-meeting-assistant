@@ -161,7 +161,7 @@ class TranscriptProcessor:
 
             # split transcript into chunks
             step = chunk_size - overlap
-            if <= 0:
+            if step <= 0:
                 logger.warning(f"Overlap ({overlap}) >= Chunk_size ({chunk_size}). Adjusting overlap")
                 overlap = max(0, chunk_size - 100)
                 step = chunk_size - overlap
