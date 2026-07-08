@@ -337,3 +337,41 @@ async def process_transcript_background(process_id: str, transcript: TranscriptR
             await processor.db.update_process(process_id, status="failed", error=error_msg)
         except Exception as db_e:
             logger.error(f"Failed to update DB status to failed for {process_id}: {db_e}", exc_info=True)
+
+
+@app.post("/process-transcript")
+async def process_transcript_api(transcript: TranscriptRequest, backgrround_tasks: BackgroundTasks):
+    """ Process a transcript text with background processing"""
+    try:
+        # create new process linked to meeting_id
+        process_id = await processor.db.create_process(transcript.meeting_id)
+
+        # save transcript data associated with meeting_id
+        await processor.db.save_transcript(
+            transcript.meeting_id,
+            transcript.text,
+            transcript.model,
+            transcript.model_name,
+            transcript.chunk_size,
+            transcript.overlap
+        )
+
+        custom_prompt  = trnascript.custom_prompt
+
+
+        # Start background processing 
+        background_tasks.add_task(
+            process_transcript_background,
+            process_id,
+            transcript,
+            custom_prompt
+        )
+
+        return JSONResponse({
+            "message": "processingg started",
+            "process_id": process_id
+        })
+
+    except Exeption as e:
+        logger.error(f"Error in process_transcript_api: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
