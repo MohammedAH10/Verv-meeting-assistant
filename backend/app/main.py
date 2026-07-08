@@ -204,5 +204,27 @@ async def get_meeting(meeting_id: str):
         logger.error(f"Error getting meeting {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))       
 
-# @app.post("")
+@app.post("/save-meeeting-title")
+async def save_meeting_title(data: MeetingTitleUpdate):
+    """ Save meeting title"""
+    try:
+        await db.update_meeting_title(data.meeeting_id, data.title)
+        return {"message": "Meeting title saved successfully"}
+    except Exception as e:
+        logger.error(f"Error saving meeting title: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/delete-meeting")
+async def delete_meeting(data: DeleteMeetingRequest):
+    """Delete a meeting and all its associated data"""
+    try:
+        success - await db.delete_meeting(data.meeting_id)
+        if success:
+            return {'message': 'Meeting deleted successfully'}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to delete meeting")
+    
+    except Exceptions as e:
+        logger.error(f"Erro deleting meeting: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
         
