@@ -107,7 +107,7 @@ class SaveTranscriptConfigRequest(BaseModel):
     apiKey: Optional[str] = None 
 
 
-class TrascriptRequest(BaseModel):
+class TranscriptRequest(BaseModel):
     """Request model for transcript text, updated with meeting_id"""
     text: str
     model: str
@@ -227,4 +227,113 @@ async def delete_meeting(data: DeleteMeetingRequest):
     except Exceptions as e:
         logger.error(f"Erro deleting meeting: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+async def process_transcript_background(process_id: str, transcript: TranscriptRequest, custom_prompt: str):
+    """Background task to process transcript"""
+    try:
+        logger.info(f"Starting background processing for process_id: {process_id}")
         
+        # Early validation for common issues
+        if not transcript.text or not transcript.text.strip():
+            raise ValueError("Empty transcript text provided")
+        
+        if transcript.model in ["claude", "groq", "openai"]:
+            # Check if API key is available for cloud providers
+            api_key = await processor.db.get_api_key(transcript.model)
+            if not api_key:
+                provider_names = {"claude": "Anthropic", "groq": "Groq", "openai": "OpenAI"}
+                raise ValueError(f"{provider_names.get(transcript.model, transcript.model)} API key not configured. Please set your API key in the model settings.")
+
+        _, all_json_data = await processor.process_transcript(
+            text=transcript.text,
+            model=transcript.model,
+            model_name=transcript.model_name,
+            chunk_size=transcript.chunk_size,
+            overlap=transcript.overlap,
+            custom_prompt=custom_prompt
+        )
+
+        # Create final summary structure by aggregating chunk results
+        final_summary = {
+            "MeetingName": "",
+            "People": {"title": "People", "blocks": []},
+            "SessionSummary": {"title": "Session Summary", "blocks": []},
+            "CriticalDeadlines": {"title": "Critical Deadlines", "blocks": []},
+            "KeyItemsDecisions": {"title": "Key Items & Decisions", "blocks": []},
+            "ImmediateActionItems": {"title": "Immediate Action Items", "blocks": []},
+            "NextSteps": {"title": "Next Steps", "blocks": []},
+            # "OtherImportantPoints": {"title": "Other Important Points", "blocks": []},
+            # "ClosingRemarks": {"title": "Closing Remarks", "blocks": []},
+            "MeetingNotes": {
+                "meeting_name": "",
+                "sections": []
+            }
+        }
+
+        # Process each chunk's data
+        for json_str in all_json_data:
+            try:
+                json_dict = json.loads(json_str)
+                if "MeetingName" in json_dict and json_dict["MeetingName"]:
+                    final_summary["MeetingName"] = json_dict["MeetingName"]
+                for key in final_summary:
+                    if key == "MeetingNotes" and key in json_dict:
+                        # Handle MeetingNotes sections
+                        if isinstance(json_dict[key].get("sections"), list):
+                            # Ensure each section has blocks array
+                            for section in json_dict[key]["sections"]:
+                                if not section.get("blocks"):
+                                    section["blocks"] = []
+                            final_summary[key]["sections"].extend(json_dict[key]["sections"])
+                        if json_dict[key].get("meeting_name"):
+                            final_summary[key]["meeting_name"] = json_dict[key]["meeting_name"]
+                    elif key != "MeetingName" and key in json_dict and isinstance(json_dict[key], dict) and "blocks" in json_dict[key]:
+                        if isinstance(json_dict[key]["blocks"], list):
+                            final_summary[key]["blocks"].extend(json_dict[key]["blocks"])
+                            # Also add as a new section in MeetingNotes if not already present
+                            section_exists = False
+                            for section in final_summary["MeetingNotes"]["sections"]:
+                                if section["title"] == json_dict[key]["title"]:
+                                    section["blocks"].extend(json_dict[key]["blocks"])
+                                    section_exists = True
+                                    break
+                            
+                            if not section_exists:
+                                final_summary["MeetingNotes"]["sections"].append({
+                                    "title": json_dict[key]["title"],
+                                    "blocks": json_dict[key]["blocks"].copy() if json_dict[key]["blocks"] else []
+                                })
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse JSON chunk for {process_id}: {e}. Chunk: {json_str[:100]}...")
+            except Exception as e:
+                logger.error(f"Error processing chunk data for {process_id}: {e}. Chunk: {json_str[:100]}...")
+
+        # Update database with meeting name using meeting_id
+        if final_summary["MeetingName"]:
+            await processor.db.update_meeting_name(transcript.meeting_id, final_summary["MeetingName"])
+
+        # Save final result
+        if all_json_data:
+            await processor.db.update_process(process_id, status="completed", result=json.dumps(final_summary))
+            logger.info(f"Background processing completed for process_id: {process_id}")
+        else:
+            error_msg = "Summary generation failed: No chunks were processed successfully. Check logs for specific errors."
+            await processor.db.update_process(process_id, status="failed", error=error_msg)
+            logger.error(f"Background processing failed for process_id: {process_id} - {error_msg}")
+
+    except ValueError as e:
+        # Handle specific value errors (like API key issues)
+        error_msg = str(e)
+        logger.error(f"Configuration error in background processing for {process_id}: {error_msg}", exc_info=True)
+        try:
+            await processor.db.update_process(process_id, status="failed", error=error_msg)
+        except Exception as db_e:
+            logger.error(f"Failed to update DB status to failed for {process_id}: {db_e}", exc_info=True)
+    except Exception as e:
+        # Handle all other exceptions
+        error_msg = f"Processing error: {str(e)}"
+        logger.error(f"Error in background processing for {process_id}: {error_msg}", exc_info=True)
+        try:
+            await processor.db.update_process(process_id, status="failed", error=error_msg)
+        except Exception as db_e:
+            logger.error(f"Failed to update DB status to failed for {process_id}: {db_e}", exc_info=True)
