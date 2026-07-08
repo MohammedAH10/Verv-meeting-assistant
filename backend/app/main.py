@@ -218,7 +218,7 @@ async def save_meeting_title(data: MeetingTitleUpdate):
 async def delete_meeting(data: DeleteMeetingRequest):
     """Delete a meeting and all its associated data"""
     try:
-        success - await db.delete_meeting(data.meeting_id)
+        success = await db.delete_meeting(data.meeting_id)
         if success:
             return {'message': 'Meeting deleted successfully'}
         else:
