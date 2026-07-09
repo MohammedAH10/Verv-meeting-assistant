@@ -1,6 +1,7 @@
 from string import Formatter
 import time
 import json
+from starlette.staticfiles import NotModifiedResponse
 import uvicorn
 import logging
 from fastapi import FastAPI, HTTPException, BackgroundTasks
@@ -372,7 +373,7 @@ async def process_transcript_api(transcript: TranscriptRequest, backgrround_task
             "process_id": process_id
         })
 
-    except Exeption as e:
+    except Exception as e:
         logger.error(f"Error in process_transcript_api: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -444,4 +445,72 @@ async def get_summary(meeting_id: str):
             if "MeetingNotes" in summary_data and isinstance(summary_data["MeetingNotes"], dict):
                 meeting_notes = summary_data["MeetingNotes"]
                 if isinstance(meeting_notes.get("Sections"), list):
-                    
+                    # Add section order array to maintain order
+                    transformed_data["_section_order"] = []
+                    used_keys = set()
+
+                    for index, section in enumerate(meeting_notes["sections"]):
+                        if isinstance(section, dict) and "title" in section and "blocks" in section:
+                            # Ensure blocks is a list to prevent frontend errors
+                            if not isinstance(section.get("blocks"), list):
+                                section["blocks"] = []
+
+                            # convert title to snake_case key
+                            base_key = section["title"].lower().replace(" & ", "_").replace(" ", "_")
+
+                            # handle duplicate section names by adding index
+                            key = base_key
+                            if key in used_keys:
+                                key = f"{base_key}_{index}"
+
+                            used_keys.add(key)
+                            transformed_data[key] = section
+                            #  only add to _section_order if the section was successfully added
+                            transformed_data["_section_order"].append(key)
+        response = {
+            "status": "processing" if status in ["processing", "pending", "started"] else status,
+            "meettingName": summary_data.get("MeetingName") if isinstance(summary_data, dict) else None,
+            "meeting_id": meeting_id,
+            "start": result.get("start_time"),
+            "end": result.get("end_time"),
+            "data": transformed_data if status == "compete" else None
+        }
+
+        if status == "failed":
+            response["status"] = "error"
+            response["error"] = result.get("error", "Unknown processing error")
+            response["data"] = None
+            response["meetingName"] = None
+            logger.info(f"Returning failed status with error: {response['error']}")
+            return JSONResponse(status_code=400, content=response)
+        elif status in ["processing", "pending", "started"]:
+            response["data"] = None
+            return JSONResponse(status_code=202, content=response)
+        elif status == "completed":
+            if not summary_data:
+                response["status"] = "error"
+                response["error"] = "Completed but summary data is mmissing or invalid"
+                response["data"] = None
+                response["meetingName"] = None
+                return JSONResponse(status_code=500, content=response)
+            return JSONResponse(status_code=200, content=response)
+
+        else:
+            response["status"] = "error"
+            response["error"] = f"Unknown or unexpected status: {status}"
+            response["data"] = None
+            response["meetingName"] = None
+            return JSONResponse(status_code=500, content=response)
+    except Exception as e:
+        logger.error(f"Error getting summary for {meeting_id}: {str(e)}", exc_info=True)
+        return JSONResponse(
+            content={
+                "status": "error",
+                "meetingName": None,
+                "meeting_id": meeting_id,
+                "data": None,
+                "start": None,
+                "end": None,
+                "error": f"Internal server error: {str(e)}"
+            }
+        )
