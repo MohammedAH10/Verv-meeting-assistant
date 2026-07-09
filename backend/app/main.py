@@ -224,7 +224,7 @@ async def delete_meeting(data: DeleteMeetingRequest):
         else:
             raise HTTPException(status_code=500, detail="Failed to delete meeting")
     
-    except Exceptions as e:
+    except Exception as e:
         logger.error(f"Erro deleting meeting: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -314,7 +314,7 @@ async def process_transcript_background(process_id: str, transcript: TranscriptR
 
         # Save final result
         if all_json_data:
-            await processor.db.update_process(process_id, status="completed", result=json.dumps(final_summary))
+            await processor.db.update_process(process_id, status="completed", result=json.dump(final_summary))
             logger.info(f"Background processing completed for process_id: {process_id}")
         else:
             error_msg = "Summary generation failed: No chunks were processed successfully. Check logs for specific errors."
@@ -375,3 +375,73 @@ async def process_transcript_api(transcript: TranscriptRequest, backgrround_task
     except Exeption as e:
         logger.error(f"Error in process_transcript_api: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("get-summary/{meeting_id}")
+async def get_summary(meeting_id: str):
+    """Get the summary for a given meeting ID"""
+    try:
+        result = await processor.db.get_transcript_data(meeting_id)
+        if not result:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "status": "error",
+                    "meetingName": None,
+                    "meeting_id": meeting_id,
+                    "data": None,
+                    "start": None,
+                    "end": None,
+                    "error": "Meeting ID not found"
+                }
+            )
+        status = result.get("status", "unknown").lower()
+        logger.debug(f"Summary status for meeting {meeting_id}: {status}, error: {result.get('error')}")
+
+        # parse result data if available
+        summary_data = None
+        if result.get("result"):
+            try:
+                parsed_result = json.loads(result["result"])
+
+                if isinstance(parsed_result, str):
+                    summary_data = json.loads(parsed_result)
+                else:
+                   summary_data = parsed_result
+                
+                if not isinstance(summary_data, dict):
+                    logger.error(f"Parsed summary data is not a dictionary fro metting {meeting_id}")
+                    summary_data = None
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse  JSON data for meeting {meeting_id}: {str(e)}")
+                status = "failed"
+                result["error"] = f"Invalid summary data format: {str(e)}"
+            except Exception as e:
+                logger.error(f"Unexpected error parsing summary data for {meeting_id}: {str(e)}")
+                status = "failed"
+                result["error"] = f"Error processing summary data: {str(e)}"
+
+        # Transform summary data into frontend format if available = PRESERVE ORDER
+        transformed_data = {}
+        if isinstance(summary_data, dict) and status == "completed":
+            # Add MeetingName to transformed data
+            transformed_data['MeetingName'] = summary_data.get("MeetingName", "")
+            # Map backend sections to frontend sections
+            section_mapping = {
+                # "SessionSummary": "key_points",
+                # "ImmediateActionItems": "action_items",
+                # "KeyItemsDecisions": "decisions",
+                # "NextSteps": "next_steps",
+                # "CriticalDeadlines": "critical_deadlines",
+                # "People": "people"
+            }
+            
+            # Add each section to transformed data
+            for backend_key, frontend_key in section_mapping.items():
+                if backend_key in summary_data and isinstance(summary_data[backend_key], dict):
+                    transformed_data[frontend_key] = summary_data[backend_key]
+
+            # Add meeting notes sections if available = PRESSERVE ORDER AND HANDLE DUPLICATES
+            if "MeetingNotes" in summary_data and isinstance(summary_data["MeetingNotes"], dict):
+                meeting_notes = summary_data["MeetingNotes"]
+                if isinstance(meeting_notes.get("Sections"), list):
+                    
