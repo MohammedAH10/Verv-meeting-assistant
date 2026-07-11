@@ -554,3 +554,12 @@ async def save_transcript(request: SaveTranscriptRequest):
         logger.error(f"Error saving transcript: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/get-model-config")
+async def get_model_config():
+    """Get the current model configuration"""
+    model_config = await db.get_model_config()
+    if model_config:
+        api_key = await db.get_api_key(model_config["provider"])
+        if api_key != None:
+            model_config["apiKey"] = api_key
+    return model_config
