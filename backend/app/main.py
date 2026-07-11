@@ -572,3 +572,13 @@ async def save_model_config(request: SaveModelConfigRequest):
         await db.save_api_key(request.apiKey, request.provider)
     return {"status": "success", "message": "Model configuration saved successfully"}
 
+@app.get("/get-transcript-config")
+async def get_transcript_config():
+    """Get the current transcript configuration"""
+    transcript_config = await db.get_transcript_config()
+    if transcript_config:
+        transcript_api_key = await db.get_transcript_api_key(transcript_config["provider"])
+        if transcript_api_key != None:
+            transcript_config["apiKey"] = transcript_api_key
+    return transcript_config
+
