@@ -649,5 +649,3 @@ if __name__ == "__main__":
     import multiprocessing
     multiprocessing.freeze_support()
     uvicorn.run("main:app", host="0.0.0.0", port=5167, reload=True)
-                                                                                                646,1         Bot
-
