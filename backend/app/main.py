@@ -563,3 +563,12 @@ async def get_model_config():
         if api_key != None:
             model_config["apiKey"] = api_key
     return model_config
+
+@app.post("/save-model-config")
+async def save_model_config(request: SaveModelConfigRequest):
+    """Save the model configuration"""
+    await db.save_model_config(request.provider, request.model, request.whisperModel)
+    if request.apiKey != None:
+        await db.save_api_key(request.apiKey, request.provider)
+    return {"status": "success", "message": "Model configuration saved successfully"}
+
