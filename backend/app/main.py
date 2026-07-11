@@ -609,4 +609,45 @@ class MeetingSummaryUpdate(BaseModel):
     meeting_id: str
     summary: dict
 
+@app.post("/save-meeting-summary")
+async def save_meeting_summary(data: MeetingSummaryUpdate):
+    """Save a meeting summary"""
+    try:
+        await db.update_meeting_summary(data.meeting_id, data.summary)
+        return {"message": "Meeting summary saved successfully"}
+    except ValueError as ve:
+        logger.error(f"Value error saving meeting summary: {str(ve)}")
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
+        logger.error(f"Error saving meeting summary: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+class SearchRequest(BaseModel):
+    query: str
+
+@app.post("/search-transcripts")
+async def search_transcripts(request: SearchRequest):
+    """Search through meeting transcripts for the given query"""
+    try:
+        results = await db.search_transcripts(request.query)
+        return JSONResponse(content=results)
+    except Exception as e:
+        logger.error(f"Error searching transcripts: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on API shutdown"""
+    logger.info("API shutting down, cleaning up resources")
+    try:
+        processor.cleanup()
+        logger.info("Successfully cleaned up resources")
+    except Exception as e:
+        logger.error(f"Error during cleanup: {str(e)}", exc_info=True)
+
+if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
+    uvicorn.run("main:app", host="0.0.0.0", port=5167, reload=True)
+                                                                                                646,1         Bot
 
