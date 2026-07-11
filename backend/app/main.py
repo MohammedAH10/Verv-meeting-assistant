@@ -514,3 +514,43 @@ async def get_summary(meeting_id: str):
                 "error": f"Internal server error: {str(e)}"
             }
         )
+
+@app.post("/save-transcript")
+async def save_transcript(request: SaveTranscriptRequest):
+    """Save transcript segments for a meeting without processing"""
+    try:
+        logger.info(f"Received save-transcript request for meeting: {request.meeting_title}")
+        logger.info(f"Number of transcripts to save: {len(request.transcripts)}")
+
+        # Log first transcript timestamps for debugging
+        if request.transcripts:
+            first = request.transcripts[0]
+            logger.debug(f"First transcript: audio_start_time={first.audio_start_time}, audio_end_time={first.audio_end_time}, duration={first.duration}")
+
+        # Generate a unique meeting ID
+        meeting_id = f"meeting-{int(time.time() * 1000)}"
+
+        # Save the meeting with folder path (if provided)
+        await db.save_meeting(meeting_id, request.meeting_title, folder_path=request.folder_path)
+
+        # Save each transcript segment with NEW timestamp fields for playback sync
+        for transcript in request.transcripts:
+            await db.save_meeting_transcript(
+                meeting_id=meeting_id,
+                transcript=transcript.text,
+                timestamp=transcript.timestamp,
+                summary="",
+                action_items="",
+                key_points="",
+                # NEW: Recording-relative timestamps for audio-transcript synchronization
+                audio_start_time=transcript.audio_start_time,
+                audio_end_time=transcript.audio_end_time,
+                duration=transcript.duration
+            )
+
+        logger.info("Transcripts saved successfully")
+        return {"status": "success", "message": "Transcript saved successfully", "meeting_id": meeting_id}
+    except Exception as e:
+        logger.error(f"Error saving transcript: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
